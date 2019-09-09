@@ -1,19 +1,55 @@
-#pragma once
-#ifndef SHMQUEUE_H
-#define SHMQUEUE_H
+///////////////////////////////////////////////////////////
+//  CZShmQueue.h
+//  Implementation of the Class CZShmQueue
+//  Created on:      24-6ï¿½ï¿½-2019 8:53:20
+//  Original author: Uncleyu
+///////////////////////////////////////////////////////////
+
+#if !defined(EA_1BEDCCA8_F1DB_47c5_815B_AFFCDA846E13__INCLUDED_)
+#define EA_1BEDCCA8_F1DB_47c5_815B_AFFCDA846E13__INCLUDED_
+
+/**
+ * ï¿½á¹©ï¿½ï¿½ï¿½ï¿½ï¿½Ú´ï¿½ï¿½ï¿½ï¿½
+ */
+
 #include <iostream>
 #include <string>
+#include <sys/types.h>
 #include <sys/sem.h>
 #include <sys/shm.h>
+#include <sys/stat.h>
+#include <sys/errno.h>
 #include <string.h>
 #include <stdint.h>
+#include <fcntl.h>
+
 #define SHMQUEUEOK 1
 #define SHMQUEUEERROR -1
-#define SHMKEY   20160615
-#define SEMKEY   20160616
 
-namespace hhp {
-	namespace shmQueue {
+#define CheckAccess access
+#define MAKE_DIR(path)          mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH)
+
+#include "CZGlobal.h"
+#include "CZUtility.h"
+
+using namespace std;
+
+using namespace caasaii::global;
+using namespace caasaii::utility;
+
+namespace caasaii {
+namespace shmqueue {
+
+		static int createLocalPath(const char* path)
+		{
+			if (-1 == CheckAccess(path, 0))
+			{
+				if (-1 == MAKE_DIR(path))
+					return -1;
+			}
+			return 0;
+		}
+
 
 
 		class SemLock {
@@ -34,27 +70,75 @@ namespace hhp {
 			~SemLock() {
 
 			}
-			int Init() {
-				m_iSemId = ::semget(SEMKEY, 1, 0);
-				if (m_iSemId < 0) {
-					m_iSemId = ::semget(SEMKEY, 1, IPC_CREAT);
+
+			int Init(std::string sName) {
+
+			    int fd_key;
+				key_t key;
+				char keyfile[256];
+
+				char sys_tmp_path[128] = {0};
+				char *pTmpPath = sys_tmp_path;
+
+				CZUtility::readCfg("caasaii.config", "sys_tmp_path", &pTmpPath);
+				createLocalPath(sys_tmp_path);
+
+				sprintf(keyfile, "%s.%s", sys_tmp_path, sName.data());
+				if (-1 == (fd_key = open(keyfile,O_CREAT,0644))) 
+					return -1;
+
+				close(fd_key);
+				if (-1 == (key = ftok(keyfile, (int)'S')))
+					return -1;
+				
+				m_iSemId = ::semget(key, 1, IPC_CREAT | IPC_EXCL | 0660);
+
+				if (m_iSemId >= 0) {
 					m_isCreate = 1;
-				}
-				if (m_iSemId < 0) {
-					m_sErrMsg.clear();
-					m_sErrMsg = "semget error ";
-					return m_iSemId;
-				}
-				if (m_isCreate == 1) {
-					union semun arg;
-					arg.val = 1;
-					int ret = ::semctl(m_iSemId, 0, SETVAL, arg.val);
-					if (ret < 0) {
-						m_sErrMsg.clear();
-						m_sErrMsg = "sem setval error ";
-						return ret;
+					if (m_isCreate == 1) {
+						union semun arg;
+						arg.val = 1;
+						int ret = ::semctl(m_iSemId, 0, SETVAL, arg.val);
+						if (ret < 0) {
+							m_sErrMsg.clear();
+							m_sErrMsg = "sem setval error ";
+							return ret;
+						}
+
 					}
+				} 
+				else {
+
+					if (17 == errno)
+					{
+						m_iSemId = ::semget(key, 1, 0660);
+
+						if (m_iSemId < 0) {
+							m_sErrMsg.clear();
+							m_sErrMsg = "semget error ";
+							return m_iSemId;
+						}
+									
+						m_isCreate = 1;
+						if (m_isCreate == 1) {
+							union semun arg;
+							arg.val = 1;
+							int ret = ::semctl(m_iSemId, 0, SETVAL, arg.val);
+							if (ret < 0) {
+								m_sErrMsg.clear();
+								m_sErrMsg = "sem setval error ";
+								return ret;
+							}
+						}
+
+					} else {
+
+					   return -2;
+					}	
+
+
 				}
+
 				return m_iSemId;
 			}
 
@@ -72,6 +156,7 @@ namespace hhp {
 				}
 				return 0;
 			}
+
 			int unLock() {
 				union semun arg;
 				int val = ::semctl(m_iSemId, 0, GETVAL, arg);
@@ -86,6 +171,7 @@ namespace hhp {
 				}
 				return 0;
 			}
+
 			std::string GetErrMsg() {
 				return m_sErrMsg;
 			}
@@ -108,71 +194,84 @@ namespace hhp {
 			SemLock &m_Sem;
 		};
 
-
-		static const uint32_t SHMSIZE = 4*100+24;//²âÊÔ½«´óÐ¡µ÷Ð¡£¬Êµ¼ÊÊ¹ÓÃÊ±Ó¦¸ÃÉè´ó±ÜÃâÓ°ÏìÐÔÄÜ
-
 		class QueueHead {
 		public:
-			uint32_t uDataCount;
-			uint32_t uFront;
-			uint32_t uRear;
-			uint32_t uAllCount;
-			uint32_t uAllSize;
-			uint32_t uItemSize;
-		public:
-			QueueHead() :uDataCount(0), uFront(0), uRear(0),
-				uAllCount(0), uAllSize(0), uItemSize(0){
-
-			}
+			uint32_t uDataCount = 0;
+			uint32_t uFront = 0;
+			uint32_t uRear = 0;
+			uint32_t uAllCount = 0;
+			uint32_t uAllSize = 0;
+			uint32_t uItemSize = 0;
 		};
-
+		
+		static const uint32_t SHMSIZE = sizeof(DataCoprocessor) * sizeof(UnitCmd) + sizeof(QueueHead);//4*1024;//æµ‹è¯•å°†å¤§å°è°ƒå°ï¼Œå®žé™…ä½¿ç”¨æ—¶åº”è¯¥è®¾å¤§é¿å…å½±å“æ€§èƒ½
 
 		template<typename T>
-		class shmQueue {
+		class CZShmQueue {
 		public:
-		explicit shmQueue(int iCreate=-1):m_pShm(NULL),m_iStatus(-1), m_iShmId(-1), m_iCreate(iCreate){
+		explicit CZShmQueue(const char *sName, int iCreate=-1):m_pShm(NULL),m_iStatus(-1), m_iShmId(-1), m_iCreate(iCreate){
 				m_pShm = NULL;
+				m_sName = sName;
 			}
 
-			~shmQueue() {
+			~CZShmQueue() {
 				::shmdt(m_pShm);
 			}
 			int Init(){
-				int ret = m_Sem.Init();
+
+				int ret = m_Sem.Init(m_sName);
 				if (ret < 0) {
 					m_sErrMsg.clear();
 					m_sErrMsg = m_Sem.GetErrMsg();
 					return ret;
 				}
-				m_iShmId = ::shmget(SHMKEY,SHMSIZE,0);
+
+
+				int fd_key;
+				key_t key;
+				char keyfile[256];
+
+				char sys_tmp_path[128] = {0};
+				char *pTmpPath = sys_tmp_path;
+
+				CZUtility::readCfg("caasaii.config", "sys_tmp_path", &pTmpPath);
+				createLocalPath(sys_tmp_path);
+
+				sprintf(keyfile, "%s.%s", sys_tmp_path, m_sName.data());
+				if (-1 == (fd_key = open(keyfile, O_CREAT, 0644)))
+					return -1;
+ 
+				close(fd_key);
+
+				if (-1 == (key = ftok(keyfile, (int)'M')))
+					return -1;
+
+				m_iShmId = ::shmget(key,SHMSIZE,IPC_CREAT | 0660);
+
 				if (m_iShmId < 0) {
-					m_iCreate = 1;
-					m_iShmId = ::shmget(SHMKEY, SHMSIZE, IPC_CREAT);
-				}
-				if (m_iShmId < 0) {
-					m_sErrMsg.clear();
-					m_sErrMsg = "shmget error ";
-					m_iStatus = SHMQUEUEERROR;
-					return m_iShmId;
+						m_sErrMsg.clear();
+						m_sErrMsg = "shmget error ";
+						m_iStatus = SHMQUEUEERROR;
+						return m_iShmId;
+
 				}
 
-				m_pShm = (char*)::shmat(m_iShmId,NULL,0);//¶ÁÐ´Ä£Ê½£»
+				m_pShm = (char*)::shmat(m_iShmId,NULL,0);//è¯»å†™æ¨¡å¼ï¼›
+
 				if (m_pShm == NULL) {
 					m_sErrMsg.clear();
 					m_sErrMsg = "shmat error ";
 					return -1;
 				}
 			
-				if (m_iCreate == 1) {
-					QueueHead oQueryHead;
-					oQueryHead.uItemSize = sizeof(T);
-					oQueryHead.uAllSize = SHMSIZE - 20;
-					oQueryHead.uAllCount = oQueryHead.uAllSize / oQueryHead.uItemSize;
-					oQueryHead.uDataCount = 0;
-					oQueryHead.uFront = 0;
-					oQueryHead.uRear = 0;
-					::memcpy(m_pShm,&oQueryHead,sizeof(QueueHead));
-				}
+				QueueHead oQueryHead;
+				oQueryHead.uItemSize = sizeof(T);
+				oQueryHead.uAllSize = SHMSIZE - sizeof(QueueHead);
+				oQueryHead.uAllCount = oQueryHead.uAllSize / oQueryHead.uItemSize;
+				oQueryHead.uDataCount = 0;
+				oQueryHead.uFront = 0;
+				oQueryHead.uRear = 0;
+				::memcpy(m_pShm,&oQueryHead,sizeof(QueueHead));
 				
 				return m_iShmId;
 			}
@@ -200,26 +299,31 @@ namespace hhp {
 
 			int  push(T a){
 
+				cout << "----CZShmQueue:push" << ", share name = " << m_sName << __FILE__ << __FUNCTION__ << __LINE__ << endl;
+
 				semLockGuard oLock(m_Sem);
 
-				if (isFull()) {
+				if (isFull())
 					return -1;
-				}
+				
 				QueueHead oQueryHead;
 				memcpy(&oQueryHead, m_pShm, sizeof(QueueHead));
 
 				char *p = m_pShm + sizeof(QueueHead) + oQueryHead.uRear * sizeof(T);
 				*((uint32_t*)(m_pShm + sizeof(int) * 2)) = (oQueryHead.uRear + 1) % oQueryHead.uAllCount;
 				memcpy(p,&a,sizeof(T));
+
 				return 0;
 			}
 
 			T pop() {
 
+				cout << "----CZShmQueue:pop" << ", share name = " << m_sName <<  __FILE__ << __FUNCTION__ << __LINE__ << endl;
+
 				semLockGuard oLock(m_Sem);
 
 				if (isEmpty()) {
-					return T();//Ó¦¸ÃÑ¡ÔñÅ×³öÒì³£µÈ·½Ê½£¬´ý¸Ä½ø£»
+					return T();		//åº”è¯¥é€‰æ‹©æŠ›å‡ºå¼‚å¸¸ç­‰æ–¹å¼ï¼Œå¾…æ”¹è¿›ï¼›
 				}
 				QueueHead oQueryHead;
 				memcpy(&oQueryHead, m_pShm, sizeof(QueueHead));
@@ -237,18 +341,18 @@ namespace hhp {
 			std::string GetErrMsg() {
 				return m_sErrMsg;
 			}
+			
 		private:
-			char *m_pShm;
-			int m_iShmId;
-			int m_iStatus;
-			int m_iCreate;
+			char* m_pShm;
+			int   m_iShmId;
+			int   m_iStatus;
+			int   m_iCreate;
 			SemLock m_Sem;
+			std::string m_sName;
 			std::string m_sErrMsg;
 		};
 
-
-	}
+}
 }
 
-#endif // !SHMQUEUE_H
-
+#endif // !defined(EA_1BEDCCA8_F1DB_47c5_815B_AFFCDA846E13__INCLUDED_)

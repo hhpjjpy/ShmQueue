@@ -3,9 +3,11 @@
 #include <unistd.h>
 #include "shmQueue.h"
 
-using namespace hhp::shmQueue;
+using namespace caasaii::shmQueue;
+
 int main() {
-	shmQueue<int> oShmQueue(1);
+
+	shmQueue<int> oShmQueue("producer", 1);
 	if (oShmQueue.Init() < 0) {
 		std::cout << " init error  msg: " << oShmQueue.GetErrMsg() << std::endl;
 	}
